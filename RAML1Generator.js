@@ -13217,14 +13217,42 @@ methods.updateHostKeyWithLongestCommonPathname = function (_ref4, key) {
 };
 
 /**
+ * converts a PawRequest into an array of entries of size 1 where the key is the extracted origin of
+ * the urlBase of the requests.
+ * @param {Array<PawRequest>} request: the requests to group by host
+ * @returns {Array<Entry<string, PawRequest>>} the corresponding sequence of entries.
+ */
+methods.convertSingleRequestIntoRequestEntry = function (request) {
+  var baseUrl = request.getUrlBase();
+  var numberOfSlashes = (0, _url.parse)(baseUrl).slashes ? 3 : 1;
+  var origin = baseUrl.split('/').slice(0, numberOfSlashes).join('/');
+  return [{ key: origin, value: request }];
+};
+
+/**
+ * converts an array of PawRequests into an array of entries where the keys are the urlBase of the
+ * requests, except if there is only one request.
+ * @param {Array<PawRequest>} requests: the requests to group by host
+ * @returns {Array<Entry<string, PawRequest>>} the corresponding sequence of entries.
+ */
+methods.convertRequestsIntoRequestEntries = function (requests) {
+  if (requests.length === 1) {
+    return methods.convertSingleRequestIntoRequestEntry(requests[0]);
+  }
+
+  return requests.map(function (request) {
+    return { key: request.getUrlBase(), value: request };
+  });
+};
+
+/**
  * extracts common hosts from a list of requests, and assigns each request to its corresponding host
  * @param {Array<PawRequest>} requests: the requests to group by host
  * @returns {Seq<Entry<string, *>>} the corresponding sequence of entries.
  */
 methods.extractCommonHostsFromRequests = function (requests) {
-  var hosts = requests.map(function (request) {
-    return { key: request.getUrlBase(), value: request };
-  }).reduce(methods.addHostEntryToHostMap, {});
+  var requestEntries = methods.convertRequestsIntoRequestEntries(requests);
+  var hosts = requestEntries.reduce(methods.addHostEntryToHostMap, {});
 
   return new _immutable.OrderedMap(hosts).map(methods.updateHostKeyWithLongestCommonPathname).valueSeq();
 };
@@ -13253,10 +13281,25 @@ methods.isPartOfBaseUrl = function (defaultUrl, defaultSecureUrl, urlPart) {
   return defaultUrl.indexOf(urlPart) >= 0 || defaultSecureUrl.indexOf(urlPart) >= 0;
 };
 
-// NOTE: we assume that the urlPart is after the protocol
-methods.findIntersection = function (defaultUrl, urlPart) {
-  var match = (defaultUrl + '####' + urlPart).match(/^.*?(.*)####\1(.*)$/);
+/**
+ * finds the intersection between two strings, and returns the intersection, as well as the right-
+ * most exclusion. This is used to find the overlap between a host url and a part of a url
+ * associated with that host.
+ * @param {string} defaultUrl: the default url to test against.
+ * @param {string} defaultSecureUrl: the default secure url to test against.
+ * @param {string} urlPart: the part of url to test
+ * @returns {{ inside: string, outside: string }}
+ *
+ * Note: this assumes Paw only supports http and https.
+ * Note: this may work incorrectly if url is as follow: http://example.com/example.com/ (not tested)
+ */
+methods.findIntersection = function (defaultUrl, defaultSecureUrl, urlPart) {
+  var baseUrl = defaultUrl;
+  if (urlPart.match(/^[^:]*s:\/\//)) {
+    baseUrl = defaultSecureUrl;
+  }
 
+  var match = (baseUrl + '####' + urlPart).match(/^.*?(.*)####\1(.*)$/);
   // always matches
   return { inside: match[1], outside: match[2] };
 };
@@ -13284,7 +13327,7 @@ methods.addComponentToBaseOrPath = function (defaultUrl, defaultSecureUrl, _ref5
   var urlPart = _ref6.key,
       component = _ref6.value;
 
-  if (methods.isPartOfBaseUrl(defaultUrl, defaultSecureUrl, urlPart)) {
+  if (pathComponents.length === 0 && methods.isPartOfBaseUrl(defaultUrl, defaultSecureUrl, urlPart)) {
     // component is member of base url
     baseComponents.push({ key: urlPart, value: component });
     return { baseComponents: baseComponents, pathComponents: pathComponents };
@@ -13292,7 +13335,7 @@ methods.addComponentToBaseOrPath = function (defaultUrl, defaultSecureUrl, _ref5
 
   if (pathComponents.length === 0) {
     // component may be split between base url and path
-    var _methods$findIntersec = methods.findIntersection(defaultUrl, urlPart),
+    var _methods$findIntersec = methods.findIntersection(defaultUrl, defaultSecureUrl, urlPart),
         inside = _methods$findIntersec.inside,
         outside = _methods$findIntersec.outside;
 
@@ -13406,7 +13449,7 @@ methods.convertBaseComponentsIntoVariable = function (context, defaultHost, base
 
   return new _Variable2.default({
     name: defaultHost,
-    values: (0, _immutable.OrderedMap)(variableValues)
+    values: new _immutable.OrderedMap(variableValues)
   });
 };
 
@@ -13483,7 +13526,7 @@ methods.convertComponentEntryIntoStringOrParam = function (request, _ref12) {
     return key;
   }
 
-  var _methods$convertReque = methods.convertRequestVariableDVIntoParameter(request, 'path', (0, _immutable.List)(), value, key),
+  var _methods$convertReque = methods.convertRequestVariableDVIntoParameter(request, 'path', new _immutable.List(), value, key),
       param = _methods$convertReque.value;
 
   return param;
@@ -13575,7 +13618,7 @@ methods.createPathEndpoint = function (sequence) {
       in: 'path',
       type: 'string',
       superType: 'sequence',
-      value: (0, _immutable.List)(sequence)
+      value: new _immutable.List(sequence)
     })
   });
 
@@ -13626,7 +13669,7 @@ methods.extractResourceFromPawRequest = function (context, reference, _ref13) {
     value: new _Resource2.default({
       name: (request.parent || {}).name || null,
       description: (request.parent || {}).description || null,
-      endpoints: (0, _immutable.OrderedMap)(endpoints),
+      endpoints: new _immutable.OrderedMap(endpoints),
       path: path,
       methods: methods.extractRequestMapFromPawRequest(context, request, endpoints)
     })
@@ -13672,7 +13715,7 @@ methods.createDefaultHostEndpoint = function (defaultHost, hostEntries) {
     url: defaultUrl
   });
 
-  var protocols = (0, _immutable.Set)(hostEntries.map(function (_ref14) {
+  var protocols = new _immutable.Set(hostEntries.map(function (_ref14) {
     var urlObject = _ref14.urlObject;
     return urlObject.protocol;
   })).toList();
@@ -13765,7 +13808,7 @@ methods.isRequestVariableDynamicValue = function (component) {
  * @returns {boolean} true if it only holds a request variable, false otherwise
  */
 methods.isRequestVariableDS = function (ds) {
-  return ds.length === 1 && methods.isRequestVariableDynamicValue(ds.components[0]);
+  return ds && ds.length === 1 && methods.isRequestVariableDynamicValue(ds.components[0]);
 };
 
 /**
@@ -13793,10 +13836,13 @@ methods.convertRequestVariableDVIntoParameter = function (request, location, con
 
   var name = variable.name,
       value = variable.value,
+      required = variable.required,
       schema = variable.schema,
       type = variable.type,
       description = variable.description;
 
+
+  var defaultValue = typeof (schema || {}).default !== 'undefined' ? schema.default : value.getEvaluatedString();
 
   var param = new _Parameter2.default({
     in: location,
@@ -13804,8 +13850,9 @@ methods.convertRequestVariableDVIntoParameter = function (request, location, con
     name: name || paramName,
     type: type || 'string',
     description: description || null,
-    default: value.getEvaluatedString(),
-    constraints: (0, _immutable.List)([new _Constraint2.default.JSONSchema(schema)]),
+    required: required || false,
+    default: defaultValue,
+    constraints: new _immutable.List([new _Constraint2.default.JSONSchema(schema)]),
     applicableContexts: contexts
   });
 
@@ -13835,7 +13882,7 @@ methods.convertRequestVariableDSIntoParameter = function (request, location, con
  * @returns {Parameter} the corresponding parameter
  */
 methods.convertStandardDSIntoParameter = function (location, contexts, paramDS, paramName) {
-  var value = paramDS.getEvaluatedString();
+  var value = paramDS ? paramDS.getEvaluatedString() : '';
   var param = new _Parameter2.default({
     in: location,
     key: paramName,
@@ -13889,12 +13936,12 @@ methods.isRequestBodyMultipart = function (request) {
  * @returns {Array<Parameter>} the corresponding applicable contexts
  */
 methods.getContentTypeContexts = function (contentType) {
-  return (0, _immutable.List)([new _Parameter2.default({
+  return new _immutable.List([new _Parameter2.default({
     key: 'Content-Type',
     name: 'Content-Type',
     in: 'headers',
     type: 'string',
-    constraints: (0, _immutable.List)([new _Constraint2.default.Enum([contentType])])
+    constraints: new _immutable.List([new _Constraint2.default.Enum([contentType])])
   })]);
 };
 
@@ -13929,7 +13976,7 @@ methods.createDefaultArrayParameter = function (contexts, name) {
  * @returns {OrderedMap<string, Parameter>} the corresponding OrderedMap of body Parameters
  */
 methods.createUrlEncodedOrMultipartBodyParameters = function (dsMap, contexts, request) {
-  var bodyParams = (0, _immutable.OrderedMap)(dsMap).map(function (value, name) {
+  var bodyParams = new _immutable.OrderedMap(dsMap).map(function (value, name) {
     if (Array.isArray(value)) {
       return methods.createDefaultArrayParameter(contexts, name);
     }
@@ -13937,7 +13984,7 @@ methods.createUrlEncodedOrMultipartBodyParameters = function (dsMap, contexts, r
     return methods.convertParameterDynamicStringIntoParameter(request, 'body', contexts, value, name);
   }).reduce(_fpUtils.convertEntryListInMap, {});
 
-  return (0, _immutable.OrderedMap)(bodyParams);
+  return new _immutable.OrderedMap(bodyParams);
 };
 
 /**
@@ -13973,15 +14020,15 @@ methods.createStandardBodyParameters = function (request) {
   var bodyDS = request.getBody(true);
 
   if (!bodyDS) {
-    return (0, _immutable.OrderedMap)();
+    return new _immutable.OrderedMap();
   }
 
-  var _methods$convertParam = methods.convertParameterDynamicStringIntoParameter(request, 'body', (0, _immutable.List)(), bodyDS, null),
+  var _methods$convertParam = methods.convertParameterDynamicStringIntoParameter(request, 'body', new _immutable.List(), bodyDS, null),
       key = _methods$convertParam.key,
       value = _methods$convertParam.value;
 
   var body = (0, _defineProperty3.default)({}, key, value);
-  return (0, _immutable.OrderedMap)(body);
+  return new _immutable.OrderedMap(body);
 };
 
 /**
@@ -14007,13 +14054,15 @@ methods.getBodyParameters = function (request) {
  * @returns {OrderedMap<string, Parameter>} the corresponding OrderedMap of header parameters
  */
 methods.getHeadersMapFromRequest = function (request) {
-  var extractHeaders = (0, _fpUtils.currify)(methods.convertParameterDynamicStringIntoParameter, request, 'headers', (0, _immutable.List)());
+  var extractHeaders = (0, _fpUtils.currify)(
+  // request, location, contexts, paramDS, paramName
+  methods.convertParameterDynamicStringIntoParameter, request, 'headers', new _immutable.List());
 
-  var headers = (0, _immutable.OrderedMap)(request.getHeaders(true)).filter(function (_, name) {
+  var headers = new _immutable.OrderedMap(request.getHeaders(true)).filter(function (_, name) {
     return name !== 'Authorization';
   }).map(extractHeaders).reduce(_fpUtils.convertEntryListInMap, {});
 
-  return (0, _immutable.OrderedMap)(headers);
+  return new _immutable.OrderedMap(headers);
 };
 
 /**
@@ -14022,11 +14071,11 @@ methods.getHeadersMapFromRequest = function (request) {
  * @returns {OrderedMap<string, Parameter>} the corresponding OrderedMap of query parameters
  */
 methods.getQueriesMapFromRequest = function (request) {
-  var extractUrlParams = (0, _fpUtils.currify)(methods.convertParameterDynamicStringIntoParameter, request, 'queries', (0, _immutable.List)());
+  var extractUrlParams = (0, _fpUtils.currify)(methods.convertParameterDynamicStringIntoParameter, request, 'queries', new _immutable.List());
 
-  var queryParams = (0, _immutable.OrderedMap)(request.getUrlParameters(true)).map(extractUrlParams).reduce(_fpUtils.convertEntryListInMap, {});
+  var queryParams = new _immutable.OrderedMap(request.getUrlParameters(true)).map(extractUrlParams).reduce(_fpUtils.convertEntryListInMap, {});
 
-  return (0, _immutable.OrderedMap)(queryParams);
+  return new _immutable.OrderedMap(queryParams);
 };
 
 /**
@@ -14161,12 +14210,12 @@ methods.getAuthNameFromAuth = function (context, request, authDS) {
 methods.extractAuthReferencesFromRequest = function (context, request) {
   var auth = request.getHeaderByName('Authorization', true);
   if (!auth) {
-    return (0, _immutable.List)();
+    return new _immutable.List();
   }
 
   var authName = methods.getAuthNameFromAuth(context, request, auth);
 
-  return (0, _immutable.List)([new _Reference2.default({
+  return new _immutable.List([new _Reference2.default({
     type: 'auth',
     uuid: authName
   })]);
@@ -14186,7 +14235,7 @@ methods.extractRequestMapFromPawRequest = function (context, pawReq, endpoints) 
 
   var request = new _Request2.default({
     id: pawReq.id,
-    endpoints: (0, _immutable.OrderedMap)(endpoints),
+    endpoints: new _immutable.OrderedMap(endpoints),
     name: pawReq.name,
     description: pawReq.description,
     method: method,
@@ -14194,7 +14243,7 @@ methods.extractRequestMapFromPawRequest = function (context, pawReq, endpoints) 
     auths: auths
   });
 
-  return (0, _immutable.OrderedMap)((0, _defineProperty3.default)({}, method, request));
+  return new _immutable.OrderedMap((0, _defineProperty3.default)({}, method, request));
 };
 
 /**
@@ -14212,13 +14261,13 @@ methods.extractRequestMapFromPawRequest = function (context, pawReq, endpoints) 
  * @param {URL?} entry.endpoint: the endpoint associated with the host, if it exists
  * @returns {object} acc, the updated accumulator
  */
-methods.groupResourcesVariablesAndEndpoints = function (_ref16, _ref17) {
-  var resources = _ref16.resources,
-      variables = _ref16.variables,
-      endpoints = _ref16.endpoints;
-  var hostResources = _ref17.resources,
-      variable = _ref17.variable,
-      endpoint = _ref17.endpoint;
+methods.groupResourcesVariablesAndEndpoints = function (_ref17, _ref18) {
+  var resources = _ref17.resources,
+      variables = _ref17.variables,
+      endpoints = _ref17.endpoints;
+  var hostResources = _ref18.resources,
+      variable = _ref18.variable,
+      endpoint = _ref18.endpoint;
 
   if (variable) {
     variables.push(variable);
@@ -14380,7 +14429,7 @@ methods.extractResources = function (context, reqs) {
       variables = _hosts$map$reduce.variables,
       endpoints = _hosts$map$reduce.endpoints;
 
-  var resourceMap = (0, _immutable.OrderedMap)(resources.reduce(_fpUtils.convertEntryListInMap, {}));
+  var resourceMap = new _immutable.OrderedMap(resources.reduce(_fpUtils.convertEntryListInMap, {}));
 
   return { resources: resourceMap, variables: variables, endpoints: endpoints };
 };
@@ -14398,14 +14447,14 @@ methods.extractStore = function (context, variables, endpoints, reqs) {
     return request.getHeaderByName('Authorization', true);
   }).map(function (request) {
     return methods.extractAuthsFromRequest(context, request);
-  }).filter(function (_ref18) {
-    var key = _ref18.key;
+  }).filter(function (_ref19) {
+    var key = _ref19.key;
     return !!key;
   });
 
-  var variableStore = (0, _immutable.OrderedMap)(variables.reduce(_fpUtils.convertEntryListInMap, {}));
-  var endpointStore = (0, _immutable.OrderedMap)(endpoints.reduce(_fpUtils.convertEntryListInMap, {}));
-  var authStore = (0, _immutable.OrderedMap)(auths.reduce(_fpUtils.convertEntryListInMap, {}));
+  var variableStore = new _immutable.OrderedMap(variables.reduce(_fpUtils.convertEntryListInMap, {}));
+  var endpointStore = new _immutable.OrderedMap(endpoints.reduce(_fpUtils.convertEntryListInMap, {}));
+  var authStore = new _immutable.OrderedMap(auths.reduce(_fpUtils.convertEntryListInMap, {}));
 
   var store = new _Store2.default({
     variable: variableStore,
@@ -14445,8 +14494,8 @@ methods.extractResourcesAndStore = function (context, reqs) {
  * @param {PawRequest} parserOptions.reqs: the array of requests to import
  * @returns {Api} the corresponding Api
  */
-methods.parse = function (_ref19) {
-  var options = _ref19.options;
+methods.parse = function (_ref20) {
+  var options = _ref20.options;
   var context = options.context,
       reqs = options.reqs;
 
@@ -15400,6 +15449,8 @@ methods.extractProtocolsFromApi = function (api) {
   }
 
   var validProtocols = protocols.filter(function (protocol) {
+    return !!protocol;
+  }).filter(function (protocol) {
     return protocol.match(/https?:?/i);
   }).map(function (protocol) {
     return protocol.match(/(https?)/i)[1].toUpperCase();
